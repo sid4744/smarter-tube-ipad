@@ -5,23 +5,81 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write  # publishes the "latest" release that AltStore installs from
+
 jobs:
   build:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
       - name: Generate Xcode project
         run: brew install xcodegen && xcodegen generate
-      - name: Build (unsigned; Sideloadly signs it on install)
+
+      - name: Build (unsigned; AltStore signs it on install)
         run: |
           xcodebuild -project SmarterTV.xcodeproj -scheme SmarterTV -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tail -40
+
       - name: Package .ipa
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/SmarterTV.app Payload/
           zip -qry SmarterTV.ipa Payload
+
+      - name: AltStore source
+        run: |
+          VERSION="0.1.${{ github.run_number }}"
+          SIZE=$(stat -f%z SmarterTV.ipa)
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          REPO="${{ github.repository }}"
+          cat > source.json <<EOF
+          {
+            "name": "Smarter TV",
+            "identifier": "app.smarter.tv.source",
+            "sourceURL": "https://github.com/${REPO}/releases/download/latest/source.json",
+            "apps": [
+              {
+                "name": "Smarter TV",
+                "bundleIdentifier": "app.smarter.tv",
+                "developerName": "sid4744",
+                "subtitle": "Your YouTube home feed as cable TV, with an old CRT look.",
+                "localizedDescription": "Smarter Tube's TV mode remade for iPad.",
+                "iconURL": "https://raw.githubusercontent.com/${REPO}/main/App/icon.png",
+                "tintColor": "78FF96",
+                "versions": [
+                  {
+                    "version": "${VERSION}",
+                    "buildVersion": "${{ github.run_number }}",
+                    "date": "${DATE}",
+                    "downloadURL": "https://github.com/${REPO}/releases/download/latest/SmarterTV.ipa",
+                    "size": ${SIZE},
+                    "minOSVersion": "17.0"
+                  }
+                ],
+                "version": "${VERSION}",
+                "versionDate": "${DATE}",
+                "downloadURL": "https://github.com/${REPO}/releases/download/latest/SmarterTV.ipa",
+                "size": ${SIZE}
+              }
+            ],
+            "news": []
+          }
+          EOF
+          python3 -m json.tool source.json > /dev/null
+
+      - name: Publish the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest SmarterTV.ipa source.json --title "Smarter TV (latest build)" \
+            --notes "Build ${{ github.run_number }} of ${{ github.sha }}. Add the source in AltStore: https://github.com/${{ github.repository }}/releases/download/latest/source.json" \
+            --target "${{ github.sha }}"
+
       - uses: actions/upload-artifact@v4
         with:
           name: SmarterTV-ipa

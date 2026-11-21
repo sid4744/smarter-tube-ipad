@@ -171,12 +171,30 @@ def solve(js, n_list, sig_list):
     return result
 
 
+_pot = {}
+
+
+def tv_pot():
+    """TV session PoToken via BotGuard (headless Chrome here, WKWebView on the iPad). Valid ~12 h."""
+    if not _pot or _pot["at"] + 3600 < time.time():
+        out = subprocess.run(["node", "--max-http-header-size=262144", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "botguard", "tv_potoken.mjs")], capture_output=True, text=True, encoding="utf-8")
+        _pot.update(json.loads(out.stdout))
+        _pot["at"] = time.time()
+    return _pot
+
+
 def stream_urls(video_id, auth=False):
     """Playable URLs per itag, via the TV client (SmartTube's way)."""
     info = app_info()
     js = player_js(info["player_url"])
-    r = innertube("player", {"videoId": video_id, "playbackContext": {"contentPlaybackContext": {
-        "signatureTimestamp": signature_timestamp(js)}}}, client=TV, auth=auth, visitor=info["visitor"])
+    pot = tv_pot()
+    client = dict(TV, tvAppInfo={"livingRoomPoTokenId": pot["livingRoomId"]})
+    r = innertube("player", {"videoId": video_id,
+                             "serviceIntegrityDimensions": {"poToken": pot["poToken"]},
+                             "playbackContext": {"contentPlaybackContext": {
+                                 "signatureTimestamp": signature_timestamp(js)}}},
+                  client=client, auth=auth, visitor=pot["visitorData"])
     st = r.get("playabilityStatus", {})
     fmts = r.get("streamingData", {}).get("adaptiveFormats", []) + r.get("streamingData", {}).get("formats", [])
     entries = []
@@ -201,6 +219,7 @@ def stream_urls(video_id, auth=False):
             q["n"] = [solved["n"][n]]
         if s and "sig" in solved:
             q[sp] = [solved["sig"][s]]
+        q["pot"] = [pot["poToken"]]  # the same session token goes on the stream requests
         out[f["itag"]] = {"url": u._replace(query=urllib.parse.urlencode(q, doseq=True)).geturl(),
                           "mime": f.get("mimeType"), "quality": f.get("qualityLabel"), "bitrate": f.get("bitrate"),
                           "init": f.get("initRange"), "index": f.get("indexRange"), "len": f.get("contentLength")}
