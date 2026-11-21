@@ -94,3 +94,114 @@ def sign_in():
     tok["expires_at"] = time.time() + tok.get("expires_in", 3600)
     json.dump(tok, open(TOKEN_FILE, "w"))
     print("SIGNED IN", flush=True)
+
+
+# --- InnerTube (YouTube's internal API) ---------------------------------------------------------
+TV = {"clientName": "TVHTML5", "clientVersion": "7.20260901.15.00", "userAgent": UA_TV}
+IOS = {"clientName": "IOS", "clientVersion": "21.26.4", "deviceMake": "Apple", "deviceModel": "iPhone16,2",
+       "osName": "iPhone", "osVersion": "18.3.2.22D82",
+       "userAgent": "com.google.ios.youtube/21.26.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)"}
+CLIENT_IDS = {"TVHTML5": "7", "IOS": "5"}
+
+
+def innertube(endpoint, payload, client=TV, auth=False, visitor=None):
+    ctx = {"client": dict(client, hl="en", gl="NL", utcOffsetMinutes=60)}
+    if visitor:
+        ctx["client"]["visitorData"] = visitor
+    body = dict(payload, context=ctx, racyCheckOk=True, contentCheckOk=True)
+    headers = {"User-Agent": client["userAgent"], "X-YouTube-Client-Name": CLIENT_IDS[client["clientName"]],
+               "X-YouTube-Client-Version": client["clientVersion"]}
+    if auth:
+        headers["Authorization"] = "Bearer " + access_token()
+    return json.loads(http("https://www.youtube.com/youtubei/v1/%s?prettyPrint=false" % endpoint, body, headers))
+
+
+def player_ios(video_id):
+    r = innertube("player", {"videoId": video_id}, client=IOS)
+    sd = r.get("streamingData", {})
+    return {"status": r.get("playabilityStatus", {}).get("status"),
+            "reason": r.get("playabilityStatus", {}).get("reason"),
+            "hls": sd.get("hlsManifestUrl"),
+            "formats": len(sd.get("formats", [])) + len(sd.get("adaptiveFormats", [])),
+            "title": r.get("videoDetails", {}).get("title"),
+            "length": r.get("videoDetails", {}).get("lengthSeconds")}
+
+
+# --- unscrambling stream addresses: yt-dlp's EJS solver run on YouTube's own player script -----
+# (Node stands in for the iPad's JavaScriptCore here; the solver is plain JavaScript)
+import subprocess, tempfile
+SOLVER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "solver")
+_player_cache = {}
+
+
+def player_js(player_url):
+    if player_url not in _player_cache:
+        _player_cache[player_url] = http("https://www.youtube.com" + player_url)
+    return _player_cache[player_url]
+
+
+def signature_timestamp(js):
+    m = re.search(r"signatureTimestamp:(\d+)", js)
+    return int(m.group(1)) if m else None
+
+
+def solve(js, n_list, sig_list):
+    lib = "".join(open(os.path.join(SOLVER_DIR, f), encoding="utf-8").read() + "\n"
+                  for f in ["polyfill.js", "meriyah-6.1.4.min.js", "astring-1.9.0.min.js", "yt.solver.core.js"])
+    reqs = []
+    if n_list:
+        reqs.append({"type": "n", "challenges": n_list})
+    if sig_list:
+        reqs.append({"type": "sig", "challenges": sig_list})
+    data = {"type": "player", "player": js, "requests": reqs, "output_preprocessed": False}
+    script = lib + "\nconst __in = " + json.dumps(data) + ";\nprocess.stdout.write(JSON.stringify(jsc(__in)));\n"
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(script)
+        path = f.name
+    out = subprocess.run(["node", path], capture_output=True, text=True, encoding="utf-8").stdout
+    os.unlink(path)
+    res = json.loads(out)
+    if res.get("type") == "error":
+        raise RuntimeError(res.get("error"))
+    result = {}
+    for req, resp in zip(reqs, res["responses"]):
+        if resp.get("type") == "error":
+            raise RuntimeError(resp.get("error"))
+        result[req["type"]] = resp["data"]
+    return result
+
+
+def stream_urls(video_id, auth=False):
+    """Playable URLs per itag, via the TV client (SmartTube's way)."""
+    info = app_info()
+    js = player_js(info["player_url"])
+    r = innertube("player", {"videoId": video_id, "playbackContext": {"contentPlaybackContext": {
+        "signatureTimestamp": signature_timestamp(js)}}}, client=TV, auth=auth, visitor=info["visitor"])
+    st = r.get("playabilityStatus", {})
+    fmts = r.get("streamingData", {}).get("adaptiveFormats", []) + r.get("streamingData", {}).get("formats", [])
+    entries = []
+    for f in fmts:
+        if "url" in f:
+            url, s, sp = f["url"], None, None
+        else:
+            q = urllib.parse.parse_qs(f.get("signatureCipher", ""))
+            url, s, sp = q.get("url", [None])[0], q.get("s", [None])[0], q.get("sp", ["sig"])[0]
+        if not url:
+            continue
+        n = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("n", [None])[0]
+        entries.append((f, url, s, sp, n))
+    ns = sorted({e[4] for e in entries if e[4]})
+    ss = sorted({e[2] for e in entries if e[2]})
+    solved = solve(js, ns, ss) if (ns or ss) else {}
+    out = {}
+    for f, url, s, sp, n in entries:
+        u = urllib.parse.urlparse(url)
+        q = urllib.parse.parse_qs(u.query)
+        if n and "n" in solved:
+            q["n"] = [solved["n"][n]]
+        if s and "sig" in solved:
+            q[sp] = [solved["sig"][s]]
+        out[f["itag"]] = {"url": u._replace(query=urllib.parse.urlencode(q, doseq=True)).geturl(),
+                          "mime": f.get("mimeType"), "quality": f.get("qualityLabel"), "bitrate": f.get("bitrate"),
+                          "init": f.get("initRange"), "index": f.get("indexRange"), "len": f.get("contentLength")}
+    return st.get("status"), st.get("reason"), r.get("videoDetails", {}).get("title"), out
