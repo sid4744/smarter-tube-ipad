@@ -1,0 +1,9 @@
+*.xcodeproj/
+build/
+Payload/
+*.ipa
+.DS_Store
+# never commit sign-in tokens
+proto/*token*.json
+proto/state.json
+__pycache__/

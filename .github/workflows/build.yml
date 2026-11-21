@@ -1,0 +1,28 @@
+name: Build iPad app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate Xcode project
+        run: brew install xcodegen && xcodegen generate
+      - name: Build (unsigned; Sideloadly signs it on install)
+        run: |
+          xcodebuild -project SmarterTV.xcodeproj -scheme SmarterTV -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tail -40
+      - name: Package .ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/SmarterTV.app Payload/
+          zip -qry SmarterTV.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmarterTV-ipa
+          path: SmarterTV.ipa
