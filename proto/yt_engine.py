@@ -28,7 +28,7 @@ def app_info():
             break
     player = re.search(r'"player_url":"(.*?)"', page)
     visitor = re.search(r'"visitorData":"(.*?)"', page)
-    return {"base_js": base, "player_url": player.group(1).replace("\/", "/") if player else None,
+    return {"base_js": base, "player_url": player.group(1).replace(r"\/", "/") if player else None,
             "visitor": visitor.group(1) if visitor else None}
 
 
