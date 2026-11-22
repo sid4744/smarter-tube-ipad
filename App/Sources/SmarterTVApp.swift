@@ -7,10 +7,16 @@ struct SmarterTVApp: App {
 
     var body: some Scene {
         WindowGroup {
-            SignInView(auth: auth) // TV mode comes next; for now the app is its sign-in screen
-                .persistentSystemOverlays(.hidden)
-                .statusBarHidden(true)
-                .preferredColorScheme(.dark)
+            Group {
+                if case .signedIn = auth.state {
+                    TVModeView(auth: auth) // signed in: the set switches straight on
+                } else {
+                    SignInView(auth: auth)
+                }
+            }
+            .persistentSystemOverlays(.hidden)
+            .statusBarHidden(true)
+            .preferredColorScheme(.dark)
         }
     }
 }

@@ -7,3 +7,5 @@ Payload/
 proto/*token*.json
 proto/state.json
 __pycache__/
+# never commit personal data from prototype runs (feeds, history, tokens)
+proto/*.json

@@ -1,0 +1,304 @@
+import SwiftUI
+
+/// The TV: the picture inside a rounded "tube", static between channels, the green on-screen display,
+/// and touch controls (swipe = channels, tap = info, double tap = from the top,
+/// drag up/down on the left = brightness, on the right = volume, long press = menu).
+struct TVModeView: View {
+    @StateObject private var tv = TVModel()
+    @ObservedObject var auth: AuthModel
+    @State private var menuShown = false
+    @State private var dragMode = DragMode.none
+    @State private var lastDragY: CGFloat = 0
+
+    enum DragMode { case none, horizontal, brightness, volume }
+
+    var body: some View {
+        GeometryReader { geo in
+            let pic = Self.pictureRect(in: geo.size)
+            ZStack {
+                Color.black
+
+                YouTubePlayerView(player: tv.player)
+                    .frame(width: pic.width, height: pic.height)
+                    .position(x: pic.midX, y: pic.midY)
+
+                StaticNoise()
+                    .frame(width: pic.width, height: pic.height)
+                    .position(x: pic.midX, y: pic.midY)
+                    .opacity(tv.staticOn && !tv.poweringOn ? 1 : 0)
+                    .animation(.easeOut(duration: 0.6), value: tv.staticOn)
+
+                if tv.poweringOn {
+                    PowerOnView(rect: pic, duration: TVModel.powerOnSeconds)
+                }
+
+                CRTOverlay(rect: pic)
+
+                OSDLayer(tv: tv, rect: pic)
+
+                if let message = tv.message {
+                    OSDText(message, size: 22).position(x: pic.midX, y: pic.midY)
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                TapGesture(count: 2).onEnded { tv.restartProgram() }
+                    .exclusively(before: TapGesture(count: 1).onEnded { tv.showInfo() })
+            )
+            .simultaneousGesture(dragGesture(size: geo.size))
+            .onLongPressGesture(minimumDuration: 1.2) { menuShown = true }
+        }
+        .ignoresSafeArea()
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = true
+            tv.start()
+        }
+        .confirmationDialog("Smarter TV", isPresented: $menuShown) {
+            Button("Sign out", role: .destructive) { auth.signOut() }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func dragGesture(size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 18)
+            .onChanged { g in
+                if dragMode == .none {
+                    let dx = g.translation.width, dy = g.translation.height
+                    if abs(dy) > abs(dx) * 1.2 {
+                        dragMode = g.startLocation.x < size.width / 2 ? .brightness : .volume
+                        lastDragY = g.location.y
+                    } else {
+                        dragMode = .horizontal
+                    }
+                }
+                if dragMode == .brightness || dragMode == .volume {
+                    // a drag over ~80% of the screen height covers the whole range
+                    let delta = Double((lastDragY - g.location.y) / (size.height * 0.8))
+                    lastDragY = g.location.y
+                    dragMode == .brightness ? tv.adjustBrightness(by: delta) : tv.adjustVolume(by: delta)
+                }
+            }
+            .onEnded { g in
+                if dragMode == .horizontal && abs(g.translation.width) > 60 {
+                    // swipe left = next channel (the picture moves away to the left)
+                    g.translation.width < 0 ? tv.channelUp() : tv.channelDown()
+                }
+                dragMode = .none
+            }
+    }
+
+    /// A 16:9 picture fitted to the screen.
+    static func pictureRect(in size: CGSize) -> CGRect {
+        var w = size.width, h = size.width * 9 / 16
+        if h > size.height {
+            h = size.height
+            w = h * 16 / 9
+        }
+        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+    }
+}
+
+// MARK: - Static
+
+/// Black-and-white TV snow, redrawn ~18 times a second, with a rolling bright band.
+struct StaticNoise: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 18)) { timeline in
+            Image(uiImage: NoiseImage.make(time: timeline.date.timeIntervalSinceReferenceDate))
+                .resizable()
+                .interpolation(.low)
+        }
+    }
+}
+
+enum NoiseImage {
+    static let width = 192, height = 108
+
+    static func make(time: TimeInterval) -> UIImage {
+        var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        let band = Int((time * 160).truncatingRemainder(dividingBy: Double(height + 30))) - 15
+        for y in 0..<height {
+            let boost = (y >= band && y < band + 9) ? 70 : 0
+            for x in 0..<width {
+                let v = UInt8(min(255, Int.random(in: 0...255) + boost))
+                let i = (y * width + x) * 4
+                pixels[i] = v; pixels[i + 1] = v; pixels[i + 2] = v
+            }
+        }
+        let provider = CGDataProvider(data: Data(pixels) as CFData)!
+        let cg = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                         space: CGColorSpaceCreateDeviceRGB(),
+                         bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                         provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+        return UIImage(cgImage: cg)
+    }
+}
+
+// MARK: - Power-on
+
+/// Switching the set on: the beam hits the middle of the tube, smears into a line, opens up into a
+/// glowing screen, and the glow dies down into the static.
+struct PowerOnView: View {
+    let rect: CGRect
+    let duration: Double
+    @State private var start = Date()
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let u = min(1, timeline.date.timeIntervalSince(start) / duration)
+            ZStack {
+                Color.black
+                if u > 0.08 && u < 0.28 {
+                    let a = (u - 0.08) / 0.2
+                    let w = rect.width * smooth((a - 0.3) / 0.7)
+                    Circle()
+                        .fill(RadialGradient(colors: [.white, Color(white: 0.8).opacity(0.4), .clear],
+                                             center: .center, startRadius: 0, endRadius: rect.height * 0.12))
+                        .frame(width: rect.height * 0.24, height: rect.height * 0.24)
+                        .opacity(smooth(a * 2))
+                        .position(x: rect.midX, y: rect.midY)
+                    Rectangle().fill(Color.white)
+                        .frame(width: max(2, w), height: 3)
+                        .shadow(color: .white, radius: 8)
+                        .position(x: rect.midX, y: rect.midY)
+                } else if u >= 0.28 && u < 0.48 {
+                    let a = smooth((u - 0.28) / 0.2)
+                    Rectangle().fill(Color(red: 0.91, green: 0.93, blue: 1))
+                        .frame(width: rect.width, height: max(3, rect.height * a))
+                        .blur(radius: 6 * (1 - a))
+                        .position(x: rect.midX, y: rect.midY)
+                } else if u >= 0.48 {
+                    let a = (u - 0.48) / 0.52
+                    StaticNoise()
+                        .frame(width: rect.width, height: rect.height)
+                        .opacity(smooth(a * 1.8))
+                        .position(x: rect.midX, y: rect.midY)
+                    Rectangle().fill(Color(red: 0.91, green: 0.93, blue: 1))
+                        .frame(width: rect.width, height: rect.height)
+                        .opacity(0.94 * exp(-a * 3.6))
+                        .position(x: rect.midX, y: rect.midY)
+                }
+            }
+        }
+        .onAppear { start = Date() }
+    }
+
+    private func smooth(_ x: Double) -> Double {
+        let t = min(1, max(0, x))
+        return t * t * (3 - 2 * t)
+    }
+}
+
+// MARK: - CRT look
+
+/// Scanlines and darker edges over the picture, and the rounded corners of the tube around it.
+struct CRTOverlay: View {
+    let rect: CGRect
+
+    var body: some View {
+        ZStack {
+            Scanlines()
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+            RadialGradient(colors: [.clear, .clear, .black.opacity(0.2), .black.opacity(0.5)],
+                           center: .center, startRadius: 0, endRadius: hypot(rect.width, rect.height) / 2)
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+            TubeMask(rect: rect, radius: min(rect.width, rect.height) * 0.06)
+                .fill(Color.black, style: FillStyle(eoFill: true))
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Black everywhere except a rounded rectangle: the tube's corners.
+struct TubeMask: Shape {
+    let rect: CGRect
+    let radius: CGFloat
+
+    func path(in bounds: CGRect) -> Path {
+        var p = Path(bounds)
+        p.addRoundedRect(in: rect, cornerSize: CGSize(width: radius, height: radius))
+        return p
+    }
+}
+
+// MARK: - On-screen display
+
+/// Channel number, title and a volume-bar style timeline, in the TV mode's green.
+struct OSDLayer: View {
+    @ObservedObject var tv: TVModel
+    let rect: CGRect
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { timeline in
+            let now = timeline.date
+            let visible = now < tv.osdUntil && !tv.poweringOn
+            let margin = max(rect.width * 0.045, 28)
+            ZStack {
+                if visible {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        OSDText("CH", size: 16, dim: true)
+                        OSDText(String(format: "%02d", tv.channel), size: 64)
+                    }
+                    .position(x: rect.maxX - margin - 50, y: rect.minY + margin + 40)
+
+                    if tv.titleShown, let v = tv.current {
+                        VStack(alignment: .leading, spacing: 6) {
+                            OSDText(v.title, size: 22)
+                            OSDText(v.author, size: 16, dim: true)
+                        }
+                        .frame(width: rect.width * 0.62, alignment: .leading)
+                        .lineLimit(1)
+                        .position(x: rect.minX + margin + rect.width * 0.31, y: rect.minY + margin + 30)
+                    }
+
+                    if !tv.staticOn, tv.player.duration > 0 {
+                        VStack(alignment: .leading, spacing: 8) {
+                            OSDText(Self.time(tv.player.position) + " / " + Self.time(tv.player.duration), size: 16)
+                            SegmentBar(value: tv.player.position / tv.player.duration)
+                                .frame(height: 16)
+                        }
+                        .frame(width: rect.width - margin * 2)
+                        .position(x: rect.midX, y: rect.maxY - margin - 20)
+                    }
+                }
+
+                if let level = tv.level, now.timeIntervalSince(level.at) < 1.5 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        OSDText(level.label, size: 18)
+                        SegmentBar(value: level.value).frame(height: 18)
+                    }
+                    .frame(width: rect.width * 0.5)
+                    .position(x: rect.midX, y: rect.minY + rect.height * 0.75)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    static func time(_ s: Double) -> String {
+        let t = Int(max(0, s))
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
+            : String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
+
+/// A row of vertical bars, like an old set's volume display.
+struct SegmentBar: View {
+    let value: Double
+    var bars = 40
+
+    var body: some View {
+        GeometryReader { geo in
+            let pitch = geo.size.width / CGFloat(bars)
+            HStack(spacing: pitch * 0.45) {
+                ForEach(0..<bars, id: \.self) { i in
+                    Rectangle()
+                        .fill(Color.osdGreen.opacity(Double(i) < value * Double(bars) ? 1 : 0.22))
+                        .frame(width: pitch * 0.55)
+                }
+            }
+        }
+    }
+}
