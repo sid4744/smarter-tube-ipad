@@ -1,13 +1,33 @@
 import Foundation
 
-/// One video from the home feed or the watch history.
-struct FeedVideo: Identifiable, Equatable {
+/// One video card (home feed, subscriptions, history, search, related).
+struct FeedVideo: Identifiable, Equatable, Hashable {
     let id: String
     let title: String
     let author: String
     let durationSec: Double
-    /// 0...100 for history items (how far you got), else nil.
+    /// 0...100 for videos you've started (how far you got), else nil.
     let percentWatched: Double?
+    var thumbnail: URL? = nil
+    var details: String = ""
+
+    var durationText: String { OSDTime.format(durationSec) }
+    var thumbnailURL: URL { thumbnail ?? URL(string: "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg")! }
+}
+
+/// A titled row of videos ("Recommended", "Recently uploaded", ...).
+struct Shelf: Identifiable {
+    let id = UUID()
+    let title: String
+    let videos: [FeedVideo]
+}
+
+enum OSDTime {
+    static func format(_ s: Double) -> String {
+        let t = Int(max(0, s))
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
+            : String(format: "%d:%02d", t / 60, t % 60)
+    }
 }
 
 /// The home feed and the history, the way SmartTube asks for them (TV client, signed in).
@@ -40,6 +60,80 @@ enum YouTubeFeed {
     static func history(accessToken: String) async throws -> [FeedVideo] {
         let root = try await browse(["browseId": "FEhistory"], accessToken: accessToken)
         return parseTiles(root)
+    }
+
+    // MARK: - Shelves (the browse screens)
+
+    /// A browse page as titled rows, following "more shelves" pages up to `maxPages`.
+    static func shelves(browseId: String, accessToken: String, maxPages: Int = 4) async throws -> [Shelf] {
+        var out: [Shelf] = []
+        var root = try await browse(["browseId": browseId], accessToken: accessToken)
+        var pages = 1
+        while true {
+            out += parseShelves(root)
+            guard pages < maxPages, let next = sectionContinuation(root) else { break }
+            root = try await browse(["continuation": next], accessToken: accessToken)
+            pages += 1
+        }
+        return out
+    }
+
+    static func search(_ query: String, accessToken: String) async throws -> [Shelf] {
+        var body: [String: Any] = ["query": query]
+        body["context"] = ["client": tvClient, "user": ["enableSafetyMode": false, "lockedSafetyMode": false]]
+        let data = try await YouTubeAuth.post("https://www.youtube.com/youtubei/v1/search?prettyPrint=false",
+                                              json: body, bearer: accessToken)
+        return parseShelves(try JSONSerialization.jsonObject(with: data))
+    }
+
+    /// What YouTube recommends alongside this video (its "up next").
+    static func related(to videoId: String, accessToken: String) async throws -> [FeedVideo] {
+        var body: [String: Any] = ["videoId": videoId]
+        body["context"] = ["client": tvClient, "user": ["enableSafetyMode": false, "lockedSafetyMode": false]]
+        let data = try await YouTubeAuth.post("https://www.youtube.com/youtubei/v1/next?prettyPrint=false",
+                                              json: body, bearer: accessToken)
+        let root = try JSONSerialization.jsonObject(with: data)
+        var seen = Set<String>([videoId])
+        return (parseTiles(root) + parseLockups(root)).filter { seen.insert($0.id).inserted }
+    }
+
+    static func parseShelves(_ root: Any) -> [Shelf] {
+        var shelves: [[String: Any]] = []
+        collect("shelfRenderer", in: root, into: &shelves)
+        return shelves.compactMap { shelf in
+            let header: Any = shelf["headerRenderer"] ?? shelf["title"] ?? [String: Any]()
+            let title = JSONWalk.first("title", in: header).flatMap(JSONWalk.text) ?? JSONWalk.text(header) ?? ""
+            var seen = Set<String>()
+            let videos = (parseTiles(shelf) + parseLockups(shelf)).filter { seen.insert($0.id).inserted }
+            let clean = title.trimmingCharacters(in: .whitespaces)
+            return videos.isEmpty || clean.lowercased() == "shorts" ? nil : Shelf(title: clean, videos: videos)
+        }
+    }
+
+    /// Search and some newer screens use "lockup" cards instead of TV tiles.
+    static func parseLockups(_ root: Any) -> [FeedVideo] {
+        var lockups: [[String: Any]] = []
+        collect("lockupViewModel", in: root, into: &lockups)
+        return lockups.compactMap { l in
+            guard (l["contentType"] as? String) == "LOCKUP_CONTENT_TYPE_VIDEO", let id = l["contentId"] as? String else { return nil }
+            let meta = (l["metadata"] as? [String: Any])?["lockupMetadataViewModel"] as? [String: Any] ?? [:]
+            let title = ((meta["title"] as? [String: Any])?["content"] as? String) ?? ""
+            let rows = (JSONWalk.first("metadataRows", in: meta) as? [[String: Any]]) ?? []
+            func rowText(_ i: Int) -> String {
+                guard i < rows.count, let parts = rows[i]["metadataParts"] as? [[String: Any]] else { return "" }
+                return parts.compactMap { ($0["text"] as? [String: Any])?["content"] as? String }.joined(separator: " • ")
+            }
+            let image: Any = l["contentImage"] ?? [String: Any]()
+            let duration = (JSONWalk.first("thumbnailBadgeViewModel", in: image) as? [String: Any])?["text"] as? String
+            let percent = (JSONWalk.first("startPercent", in: image) as? NSNumber)?.doubleValue
+            let sources = JSONWalk.first("sources", in: image) as? [[String: Any]]
+            let thumb = (sources?.first?["url"] as? String).flatMap { URL(string: $0) }
+            let seconds = duration.map { parseDuration($0) } ?? 0
+            if seconds < 61 { return nil } // Shorts and live
+            let v = FeedVideo(id: id, title: title, author: rowText(0), durationSec: seconds, percentWatched: percent,
+                              thumbnail: thumb, details: rowText(1))
+            return isForKids(v) ? nil : v
+        }
     }
 
     // MARK: - Request + parsing
@@ -79,7 +173,17 @@ enum YouTubeFeed {
                 }
             }
             if live || duration < 61 { return nil } // no live streams, no Shorts
-            let video = FeedVideo(id: id, title: title, author: author, durationSec: duration, percentWatched: percent)
+            let thumbs = (JSONWalk.first("thumbnails", in: header) as? [[String: Any]]) ?? []
+            let thumb = (thumbs.last?["url"] as? String).flatMap { URL(string: $0) }
+            let lines = (meta["lines"] as? [Any]) ?? []
+            var details = ""
+            if lines.count > 1, let items = JSONWalk.first("items", in: lines[1]) as? [Any] {
+                details = items.compactMap { item -> String? in
+                    JSONWalk.first("text", in: item).flatMap { JSONWalk.text($0) }
+                }.filter { $0 != "•" }.joined(separator: " • ")
+            }
+            let video = FeedVideo(id: id, title: title, author: author, durationSec: duration, percentWatched: percent,
+                                  thumbnail: thumb, details: details)
             return isForKids(video) ? nil : video
         }
     }

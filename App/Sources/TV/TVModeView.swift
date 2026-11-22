@@ -5,7 +5,7 @@ import SwiftUI
 /// drag up/down on the left = brightness, on the right = volume, long press = menu).
 struct TVModeView: View {
     @StateObject private var tv = TVModel()
-    @ObservedObject var auth: AuthModel
+    let onExit: () -> Void
     @State private var menuShown = false
     @State private var dragMode = DragMode.none
     @State private var lastDragY: CGFloat = 0
@@ -53,8 +53,11 @@ struct TVModeView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             tv.start()
         }
-        .confirmationDialog("Smarter TV", isPresented: $menuShown) {
-            Button("Sign out", role: .destructive) { auth.signOut() }
+        .onDisappear { tv.player.pause() }
+        .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
+        .confirmationDialog("TV mode", isPresented: $menuShown) {
+            Button("Switch off (back to Smarter Tube)") { onExit() }
             Button("Cancel", role: .cancel) {}
         }
     }

@@ -16,6 +16,7 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
     var onEvent: ((Event) -> Void)?
     @Published private(set) var position: Double = 0
     @Published private(set) var duration: Double = 0
+    @Published private(set) var isPlaying = false
     private(set) var isReady = false
     private var pending: (id: String, start: Double)?
 
@@ -50,6 +51,18 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
     func restart() { run("seek(0)") }
     func setVolume(_ volume: Double) { run("player && player.setVolume(\(Int(volume * 100)))") }
     func pause() { run("player && player.pauseVideo()") }
+    func play() { run("player && player.playVideo()") }
+    func togglePlay() { isPlaying ? pause() : play() }
+
+    func seek(to seconds: Double) {
+        position = max(0, seconds)
+        run("seek(\(Int(max(0, seconds))))")
+    }
+
+    func skip(_ delta: Double) {
+        let limit = duration > 0 ? duration - 1 : .greatestFiniteMagnitude
+        seek(to: min(limit, max(0, position + delta)))
+    }
 
     private func run(_ js: String) {
         webView.evaluateJavaScript(js, completionHandler: nil)
@@ -72,6 +85,7 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
             }
         case "state":
             let state = (value as? NSNumber)?.intValue ?? -2
+            isPlaying = state == 1 || state == 3
             if state == 1 { onEvent?(.playing) }
             if state == 0 { onEvent?(.ended) }
         case "error":
