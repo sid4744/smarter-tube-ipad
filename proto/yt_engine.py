@@ -224,3 +224,89 @@ def stream_urls(video_id, auth=False):
                           "mime": f.get("mimeType"), "quality": f.get("qualityLabel"), "bitrate": f.get("bitrate"),
                           "init": f.get("initRange"), "index": f.get("indexRange"), "len": f.get("contentLength")}
     return st.get("status"), st.get("reason"), r.get("videoDetails", {}).get("title"), out
+
+
+# --- TV client playback, exactly like SmartTube: the TCL TV player from tv_config -------------
+TCL_PATH = "/tv-player-ias-tcl.vflset/tv-player-ias-tcl.js"
+
+
+def tcl_player_url():
+    cfg = http("https://www.youtube.com/tv_config?action_get_config=true&client=lb4&theme=cl")
+    m = re.search(r'"WEB_PLAYER_CONTEXT_CONFIG_ID_LIVING_ROOM_WATCH":\{.*?"jsUrl":"(.*?)"', cfg)
+    url = m.group(1).replace(r"\/", "/")
+    for a in ["/tv-player-es6.vflset/tv-player-es6.js", "/tv-player-ias.vflset/tv-player-ias.js",
+              "/player_es6.vflset/en_US/base.js", "/player_ias.vflset/en_US/base.js"]:
+        url = url.replace(a, TCL_PATH)
+    return url.replace("-es6", "-ias")
+
+
+def tcl_solve_n(js, n_list):
+    lib = "".join(open(os.path.join(SOLVER_DIR, f), encoding="utf-8").read() + "\n"
+                  for f in ["polyfill.js", "meriyah-6.1.4.min.js", "astring-1.9.0.min.js", "tcl.solver.js"])
+    chal = {n: "https://www.youtube.com/videoplayback?n=" + n for n in n_list}
+    data = {"type": "player", "player": js, "challenges": list(chal.values()), "output_preprocessed": False}
+    script = lib + "\nprocess.stdout.write(JSON.stringify(tclSolver(" + json.dumps(data) + ")));\n"
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(script)
+        path = f.name
+    out = subprocess.run(["node", path], capture_output=True, text=True, encoding="utf-8")
+    os.unlink(path)
+    res = json.loads(out.stdout or "{}")
+    if res.get("type") == "error" or not res:
+        raise RuntimeError(res.get("error") or out.stderr[-500:])
+    return {n: res["results"].get(c) for n, c in chal.items()}
+
+
+def tv_streams(video_id, auth=True):
+    js_url = tcl_player_url()
+    js = player_js(js_url)
+    sts = signature_timestamp(js)
+    pot = tv_pot()
+    cpn = "".join(__import__("random").choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") for _ in range(16))
+    client = dict(TV, clientScreen="WATCH", acceptLanguage="en", acceptRegion="NL", utcOffsetMinutes="60",
+                  tvAppInfo={"livingRoomPoTokenId": pot["livingRoomId"]})
+    body = {"videoId": video_id, "cpn": cpn,
+            "serviceIntegrityDimensions": {"poToken": pot["poToken"]},
+            "playbackContext": {"contentPlaybackContext": {"html5Preference": "HTML5_PREF_WANTS", "lactMilliseconds": 60000,
+                                                           "isInlinePlaybackNoAd": True, "signatureTimestamp": sts},
+                                "devicePlaybackCapabilities": {"supportsVp9Encoding": True, "supportXhr": False}}}
+    r = innertube("player", body, client=client, auth=auth, visitor=pot["visitorData"])
+    st = r.get("playabilityStatus", {})
+    sd = r.get("streamingData", {})
+    fmts = sd.get("adaptiveFormats", []) + sd.get("formats", [])
+    entries = []
+    for f in fmts:
+        if "url" in f:
+            url, s, sp = f["url"], None, None
+        else:
+            c = urllib.parse.parse_qs(f.get("signatureCipher", ""))
+            url, s, sp = c.get("url", [None])[0], c.get("s", [None])[0], c.get("sp", ["sig"])[0]
+        if url:
+            entries.append((f, url, s, sp))
+    ns = sorted({urllib.parse.parse_qs(urllib.parse.urlparse(e[1]).query).get("n", [None])[0] for e in entries} - {None})
+    ss = sorted({e[2] for e in entries if e[2]})
+    solved = tcl_solve_n(js, ns) if ns else {}
+    sigs = {}
+    if ss:
+        try:
+            # the signature step comes from the regular TV player of the same build
+            sigs = solve(player_js(js_url.replace(TCL_PATH, "/tv-player-ias.vflset/tv-player-ias.js")), [], ss).get("sig", {})
+        except Exception as e:
+            sigs = {"__error__": str(e)}
+    out = {}
+    for f, url, s, sp in entries:
+        u = urllib.parse.urlparse(url)
+        q = urllib.parse.parse_qs(u.query)
+        n = q.get("n", [None])[0]
+        if n and solved.get(n):
+            q["n"] = [solved[n]]
+        if s and sigs.get(s):
+            q[sp] = [sigs[s]]
+        q["pot"] = [pot["poToken"]]
+        q["cpn"] = [cpn]
+        out[f["itag"]] = {"url": u._replace(query=urllib.parse.urlencode(q, doseq=True)).geturl(),
+                          "mime": f.get("mimeType"), "quality": f.get("qualityLabel"),
+                          "init": f.get("initRange"), "index": f.get("indexRange"), "len": f.get("contentLength")}
+    return {"status": st.get("status"), "reason": st.get("reason"), "sts": sts, "player": js_url,
+            "sabr": bool(sd.get("serverAbrStreamingUrl")), "title": r.get("videoDetails", {}).get("title"),
+            "ciphered": sum(1 for f in fmts if "url" not in f), "sig_error": sigs.get("__error__"), "formats": out}

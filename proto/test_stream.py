@@ -1,6 +1,6 @@
 import yt_engine, urllib.request, sys
 vid = sys.argv[1] if len(sys.argv) > 1 else "nrMwgTc69y4"
-status, reason, title, urls = yt_engine.stream_urls(vid)
+status, reason, title, urls = yt_engine.stream_urls(vid, auth=True)
 print(status, reason, title, len(urls), "formats")
 for itag in [18, 137, 136, 22, 140, 251]:
     if itag in urls:
