@@ -56,7 +56,7 @@ def device_code(cd):
         "client_id": cd["client_id"], "device_id": str(uuid.uuid4()), "model_name": "ytlr::", "scope": SCOPE}))
 
 
-def poll_token(cd, code, interval, timeout=600):
+def poll_token(cd, code, interval, timeout=1800):
     end = time.time() + timeout
     while time.time() < end:
         r = json.loads(http("https://www.youtube.com/o/oauth2/token", {

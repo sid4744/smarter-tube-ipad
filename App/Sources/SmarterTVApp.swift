@@ -3,22 +3,14 @@ import SwiftUI
 /// Smarter TV: Smarter Tube's cable-TV mode, remade for the iPad.
 @main
 struct SmarterTVApp: App {
+    @StateObject private var auth = AuthModel()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            SignInView(auth: auth) // TV mode comes next; for now the app is its sign-in screen
                 .persistentSystemOverlays(.hidden)
                 .statusBarHidden(true)
-        }
-    }
-}
-
-struct ContentView: View {
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            Text("SMARTER TV")
-                .font(.system(size: 48, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color(red: 0.47, green: 1.0, blue: 0.59))
+                .preferredColorScheme(.dark)
         }
     }
 }
