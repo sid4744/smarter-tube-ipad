@@ -19,6 +19,7 @@ jobs:
 
       - name: Build (unsigned; AltStore signs it on install)
         run: |
+          set -o pipefail
           xcodebuild -project SmarterTV.xcodeproj -scheme SmarterTV -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} MARKETING_VERSION=0.1.${{ github.run_number }} \
