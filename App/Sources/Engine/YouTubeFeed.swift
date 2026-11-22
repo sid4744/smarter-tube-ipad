@@ -19,7 +19,9 @@ struct FeedVideo: Identifiable, Equatable, Hashable {
 struct Shelf: Identifiable {
     let id = UUID()
     let title: String
-    let videos: [FeedVideo]
+    var videos: [FeedVideo]
+    /// History and similar pages are one big grid rather than rows.
+    var isGrid = false
 }
 
 enum OSDTime {
@@ -70,7 +72,14 @@ enum YouTubeFeed {
         var root = try await browse(["browseId": browseId], accessToken: accessToken)
         var pages = 1
         while true {
-            out += parseShelves(root)
+            for shelf in parseShelves(root) {
+                if shelf.isGrid, let last = out.indices.last, out[last].isGrid {
+                    let known = Set(out[last].videos.map(\.id))
+                    out[last].videos += shelf.videos.filter { !known.contains($0.id) } // next page of the same grid
+                } else {
+                    out.append(shelf)
+                }
+            }
             guard pages < maxPages, let next = sectionContinuation(root) else { break }
             root = try await browse(["continuation": next], accessToken: accessToken)
             pages += 1
@@ -107,7 +116,17 @@ enum YouTubeFeed {
             let videos = (parseTiles(shelf) + parseLockups(shelf)).filter { seen.insert($0.id).inserted }
             let clean = title.trimmingCharacters(in: .whitespaces)
             return videos.isEmpty || clean.lowercased() == "shorts" ? nil : Shelf(title: clean, videos: videos)
-        }
+        } + gridShelves(root)
+    }
+
+    /// Grid pages (History): one shelf of all their videos, shown as a grid.
+    private static func gridShelves(_ root: Any) -> [Shelf] {
+        var grids: [[String: Any]] = []
+        collect("gridRenderer", in: root, into: &grids)
+        collect("gridContinuation", in: root, into: &grids)
+        var seen = Set<String>()
+        let videos = grids.flatMap { parseTiles($0) + parseLockups($0) }.filter { seen.insert($0.id).inserted }
+        return videos.isEmpty ? [] : [Shelf(title: "", videos: videos, isGrid: true)]
     }
 
     /// Search and some newer screens use "lockup" cards instead of TV tiles.
@@ -203,7 +222,8 @@ enum YouTubeFeed {
         func find(_ node: Any) {
             if let dict = node as? [String: Any] {
                 for (k, v) in dict {
-                    if (k == "sectionListRenderer" || k == "sectionListContinuation"), let list = v as? [String: Any],
+                    if ["sectionListRenderer", "sectionListContinuation", "gridRenderer", "gridContinuation"].contains(k),
+                       let list = v as? [String: Any],
                        let conts = list["continuations"] as? [[String: Any]] {
                         for c in conts {
                             if let t = (c["nextContinuationData"] as? [String: Any])?["continuation"] as? String { token = t }

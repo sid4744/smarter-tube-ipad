@@ -46,7 +46,7 @@ struct MainView: View {
                     switch section ?? .home {
                     case .home: BrowseView(browseId: "FEwhat_to_watch", pages: 4, onPlay: play)
                     case .subscriptions: BrowseView(browseId: "FEsubscriptions", pages: 3, onPlay: play)
-                    case .history: BrowseView(browseId: "FEhistory", pages: 2, onPlay: play)
+                    case .history: BrowseView(browseId: "FEhistory", pages: 4, onPlay: play)
                     case .search: SearchView(onPlay: play)
                     case .tv: TVModeLauncher { tvMode = true }
                     case .settings: SettingsView(auth: auth)
@@ -128,14 +128,25 @@ struct ShelfRow: View {
                     .foregroundStyle(Color.osdGreen)
                     .padding(.horizontal, 20)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 16) {
+            if shelf.isGrid {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 340), spacing: 18, alignment: .top)],
+                          alignment: .leading, spacing: 24) {
                     ForEach(shelf.videos) { v in
-                        Button { onPlay(v) } label: { VideoCard(video: v) }
+                        Button { onPlay(v) } label: { VideoCard(video: v, width: 280) }
                             .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 20)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 16) {
+                        ForEach(shelf.videos) { v in
+                            Button { onPlay(v) } label: { VideoCard(video: v) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
             }
         }
     }
