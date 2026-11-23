@@ -48,6 +48,14 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         run("load('\(videoId)', \(Int(start)))")
     }
 
+    /// Playback speed (0.25...2). YouTube resets it for every new video, so it's applied again when one starts.
+    private(set) var rate = 1.0
+
+    func setRate(_ r: Double) {
+        rate = r
+        run("player && player.setPlaybackRate(\(r))")
+    }
+
     func restart() { run("seek(0)") }
     func setVolume(_ volume: Double) { run("player && player.setVolume(\(Int(volume * 100)))") }
     func pause() { run("player && player.pauseVideo()") }
@@ -86,7 +94,10 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         case "state":
             let state = (value as? NSNumber)?.intValue ?? -2
             isPlaying = state == 1 || state == 3
-            if state == 1 { onEvent?(.playing) }
+            if state == 1 {
+                if rate != 1 { setRate(rate) }
+                onEvent?(.playing)
+            }
             if state == 0 { onEvent?(.ended) }
         case "error":
             onEvent?(.error((value as? NSNumber)?.intValue ?? -1))

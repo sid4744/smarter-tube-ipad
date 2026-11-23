@@ -22,6 +22,7 @@ struct PlayerScreen: View {
     @State private var staticSince = Date()
     @State private var zoomFill = false
     @State private var pull: CGFloat = 0
+    @State private var rate = 1.0
     @AppStorage(TVSettings.Key.fill) private var tvFill = false
     private let fromStart: Bool
 
@@ -210,6 +211,8 @@ struct PlayerScreen: View {
                             scrubbing = nil
                         }
                     }
+                    SpeedSlider(rate: rate, onChange: setRate, onTouch: poke)
+                        .frame(width: 320)
                     if !related.isEmpty {
                         Text("UP NEXT")
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -262,16 +265,20 @@ struct PlayerScreen: View {
                 OSDText(video.author, size: 16, dim: true)
             }
             .lineLimit(1)
-            .frame(width: screen.width * 0.55, alignment: .leading)
-            .position(x: screen.minX + margin + screen.width * 0.275, y: screen.minY + margin + 30)
+            .frame(width: screen.width * 0.5, alignment: .leading)
+            .position(x: screen.minX + margin + 76 + screen.width * 0.25, y: screen.minY + margin + 30)
             .allowsHitTesting(false)
 
-            HStack(spacing: 12) {
-                OSDButton("TV OFF", size: 16) { setTV(false) }
-                OSDButton("CLOSE", size: 16) { onClose() }
-            }
-            .fixedSize()
-            .position(x: screen.maxX - margin - 120, y: screen.minY + margin + 28)
+            XPCloseButton(action: onClose)
+                .position(x: screen.minX + margin + 24, y: screen.minY + margin + 24)
+
+            OSDButton("TV OFF", size: 16) { setTV(false) }
+                .fixedSize()
+                .position(x: screen.maxX - margin - 60, y: screen.minY + margin + 28)
+
+            SpeedSlider(rate: rate, onChange: setRate, onTouch: poke)
+                .frame(width: min(380, screen.width * 0.42))
+                .position(x: screen.minX + margin + min(380, screen.width * 0.42) / 2, y: screen.maxY - margin - 140)
 
             if player.duration > 0 {
                 VStack(alignment: .leading, spacing: 8) {
@@ -342,6 +349,12 @@ struct PlayerScreen: View {
         case .ready:
             break
         }
+    }
+
+    private func setRate(_ r: Double) {
+        rate = r
+        player.setRate(r)
+        poke()
     }
 
     private func setTV(_ on: Bool) {

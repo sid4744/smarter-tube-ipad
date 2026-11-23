@@ -12,6 +12,7 @@ final class TVModel: ObservableObject {
     @Published private(set) var titleShown = false
     @Published private(set) var message: String?
     @Published private(set) var level: (label: String, value: Double, at: Date)?
+    @Published private(set) var rate = 1.0
 
     let player = YouTubePlayer()
     private var channels: [Int: FeedVideo] = [:]
@@ -191,6 +192,19 @@ final class TVModel: ObservableObject {
         guard !staticOn else { return }
         player.restart()
         showInfo()
+    }
+
+    func setRate(_ r: Double) {
+        rate = r
+        player.setRate(r)
+        keepOSD()
+    }
+
+    /** Keep the on-screen display (and its buttons) up while you use them. */
+    func keepOSD() {
+        if osdUntil != .distantFuture {
+            osdUntil = Date().addingTimeInterval(TVSettings.osdSeconds)
+        }
     }
 
     func adjustBrightness(by delta: Double) {

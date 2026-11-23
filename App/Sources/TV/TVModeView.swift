@@ -11,7 +11,7 @@ struct TVModeView: View {
     @State private var lastDragY: CGFloat = 0
     @AppStorage(TVSettings.Key.fill) private var fill = false
 
-    enum DragMode { case none, horizontal, brightness, volume }
+    enum DragMode { case none, horizontal, brightness, volume, ignored }
 
     var body: some View {
         GeometryReader { geo in
@@ -35,6 +35,8 @@ struct TVModeView: View {
                 CRTOverlay(rect: pic)
 
                 OSDLayer(tv: tv, rect: pic)
+
+                TVTouchControls(tv: tv, rect: pic, onExit: onExit)
 
                 if let message = tv.message {
                     OSDText(message, size: 22).position(x: pic.midX, y: pic.midY)
@@ -70,10 +72,32 @@ struct TVModeView: View {
         }
     }
 
+    /// Where the close button and the speed bar sit (so drags there don't change channel).
+    static func closeCenter(_ pic: CGRect) -> CGPoint {
+        let margin = max(pic.width * 0.045, 28)
+        return CGPoint(x: pic.minX + margin + 24, y: pic.minY + margin + 24)
+    }
+
+    static func speedRect(_ pic: CGRect) -> CGRect {
+        let margin = max(pic.width * 0.045, 28)
+        let w = min(380, pic.width * 0.42), h: CGFloat = 70
+        return CGRect(x: pic.minX + margin, y: pic.maxY - margin - 70 - h, width: w, height: h)
+    }
+
+    static func controlRects(_ pic: CGRect) -> [CGRect] {
+        let c = closeCenter(pic)
+        return [CGRect(x: c.x - 40, y: c.y - 40, width: 80, height: 80), speedRect(pic).insetBy(dx: -12, dy: -12)]
+    }
+
     private func dragGesture(size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 18)
             .onChanged { g in
                 if dragMode == .none {
+                    let pic = PictureLayout.tvScreen(in: size, fill: fill)
+                    if Self.controlRects(pic).contains(where: { $0.contains(g.startLocation) }) {
+                        dragMode = .ignored // sliding the speed bar, not changing channel
+                        return
+                    }
                     let dx = g.translation.width, dy = g.translation.height
                     if abs(dy) > abs(dx) * 1.2 {
                         dragMode = g.startLocation.x < size.width / 2 ? .brightness : .volume
@@ -260,9 +284,9 @@ struct OSDLayer: View {
                             OSDText(v.title, size: 22)
                             OSDText(v.author, size: 16, dim: true)
                         }
-                        .frame(width: rect.width * 0.62, alignment: .leading)
+                        .frame(width: rect.width * 0.56, alignment: .leading)
                         .lineLimit(1)
-                        .position(x: rect.minX + margin + rect.width * 0.31, y: rect.minY + margin + 30)
+                        .position(x: rect.minX + margin + 76 + rect.width * 0.28, y: rect.minY + margin + 30)
                     }
 
                     if !tv.staticOn, tv.player.duration > 0 {
@@ -293,6 +317,31 @@ struct OSDLayer: View {
         let t = Int(max(0, s))
         return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
             : String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
+
+/// The buttons that come up with the on-screen display: the close button (top left) and the speed bar.
+struct TVTouchControls: View {
+    @ObservedObject var tv: TVModel
+    let rect: CGRect
+    let onExit: () -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { timeline in
+            let visible = (timeline.date < tv.osdUntil && !tv.poweringOn) || tv.message != nil
+            let speed = TVModeView.speedRect(rect)
+            ZStack {
+                if visible {
+                    XPCloseButton(action: onExit)
+                        .position(TVModeView.closeCenter(rect))
+                    SpeedSlider(rate: tv.rate, onChange: { tv.setRate($0) }, onTouch: { tv.keepOSD() })
+                        .frame(width: speed.width)
+                        .position(x: speed.midX, y: speed.midY)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(.easeInOut(duration: 0.25), value: visible)
+        }
     }
 }
 
