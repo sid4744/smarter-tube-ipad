@@ -80,6 +80,8 @@ jobs:
           gh release create latest SmarterTV.ipa source.json --title "Smarter TV (latest build)" \
             --notes "Build ${{ github.run_number }} of ${{ github.sha }}. Add the source in AltStore: https://github.com/${{ github.repository }}/releases/download/latest/source.json" \
             --target "${{ github.sha }}"
+          # GitHub has left the release as a draft once (the AltStore link then 404s): make sure it's published
+          gh release edit latest --draft=false
 
       - uses: actions/upload-artifact@v4
         with:
