@@ -574,6 +574,8 @@ struct SettingsView: View {
 
             Section("About") {
                 LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
+                LabeledContent("Hiding YouTube's own titles",
+                               value: UserDefaults.standard.object(forKey: YouTubePlayer.probeKey) is Date ? "Working" : "Not running (play a video first)")
                 Text("Smarter Tube for iPad. Plays videos with YouTube's own player for now; the full CRT shader comes with the native player.")
                     .font(.footnote).foregroundStyle(.secondary)
             }

@@ -29,7 +29,7 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         config.allowsPictureInPictureMediaPlayback = false
         let controller = WKUserContentController()
         // runs inside YouTube's iframe too: its own title/logo/cards would show under our green display
-        controller.addUserScript(WKUserScript(source: Self.hideYouTubeChrome, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+        controller.addUserScript(WKUserScript(source: Self.hideYouTubeChrome, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         config.userContentController = controller
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
@@ -41,10 +41,9 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.scrollView.contentInset = .zero
         webView.isUserInteractionEnabled = false // the TV gestures sit on top
-        // The page lives at youtube.com (like Google's own iOS player helper): YouTube wants a referrer
-        // (error 152/153 without one), and being the same site as the embed lets us reach into the player
-        // to hide its own title/share/"more videos" and read the captions.
-        webView.loadHTMLString(Self.html, baseURL: URL(string: "https://www.youtube.com/"))
+        // A real https page as the embedder: YouTube refuses embeds without a referrer (error 152/153),
+        // and says "unavailable" when the page claims to be youtube.com itself.
+        webView.loadHTMLString(Self.html, baseURL: URL(string: "https://sid4744.github.io/smarter-tv/"))
     }
 
     func load(videoId: String, start: Double) {
@@ -111,6 +110,9 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
             if state == 0 { onEvent?(.ended) }
         case "error":
             onEvent?(.error((value as? NSNumber)?.intValue ?? -1))
+        case "probe":
+            // our script really runs inside YouTube's player (Settings shows this)
+            UserDefaults.standard.set(Date(), forKey: Self.probeKey)
         case "cc":
             let text = (value as? String) ?? ""
             if text != caption { caption = text }
@@ -124,9 +126,12 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         }
     }
 
+    static let probeKey = "player.insideScriptSeen"
+
     private static let hideYouTubeChrome = """
     (function () {
       if (!/(^|\\.)youtube(-nocookie)?\\.com$/.test(location.hostname)) return;
+      try { window.webkit.messageHandlers.yt.postMessage({type: 'probe', value: location.hostname}); } catch (e) {}
       var s = document.createElement('style');
       s.textContent = '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-title,'
         + '.ytp-title-channel,.ytp-show-cards-title,.ytp-watermark,.ytp-youtube-button,.ytp-pause-overlay,'
@@ -176,7 +181,7 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
       player = new YT.Player('p', {
         width: '100%', height: '100%',
         playerVars: {autoplay: 1, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3, modestbranding: 1,
-                     playsinline: 1, rel: 0, cc_load_policy: 0, origin: 'https://www.youtube.com'},
+                     playsinline: 1, rel: 0, cc_load_policy: 0, origin: 'https://sid4744.github.io'},
         events: {
           onReady: function () { post('ready'); },
           onStateChange: function (e) { post('state', e.data); },
