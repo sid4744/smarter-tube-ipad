@@ -34,29 +34,33 @@ struct TVModeView: View {
 
                 CRTOverlay(rect: pic)
 
-                OSDLayer(tv: tv, rect: pic)
+                // the "remote": gestures live on their own layer, under the buttons, so the buttons get their taps
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(
+                        TapGesture(count: 2).onEnded { tv.restartProgram() }
+                            .exclusively(before: TapGesture(count: 1).onEnded { tv.showInfo() })
+                    )
+                    .simultaneousGesture(dragGesture(size: geo.size))
+                    .simultaneousGesture(
+                        // pinch out = fill the whole display, pinch in = back to a 16:9 tube
+                        MagnificationGesture().onEnded { scale in
+                            guard scale > 1.12 || scale < 0.89 else { return }
+                            Haptics.tap()
+                            withAnimation(.easeInOut(duration: 0.3)) { fill = scale > 1 }
+                        }
+                    )
+                    .onLongPressGesture(minimumDuration: 1.2) { menuShown = true }
 
-                TVTouchControls(tv: tv, rect: pic, onExit: onExit)
+                OSDLayer(tv: tv, place: OSDPlacement(size: geo.size, pic: pic))
+
+                TVTouchControls(tv: tv, place: OSDPlacement(size: geo.size, pic: pic), onExit: onExit)
 
                 if let message = tv.message {
                     OSDText(message, size: 22).position(x: pic.midX, y: pic.midY)
+                        .allowsHitTesting(false)
                 }
             }
-            .contentShape(Rectangle())
-            .gesture(
-                TapGesture(count: 2).onEnded { tv.restartProgram() }
-                    .exclusively(before: TapGesture(count: 1).onEnded { tv.showInfo() })
-            )
-            .simultaneousGesture(dragGesture(size: geo.size))
-            .simultaneousGesture(
-                // pinch out = fill the whole display, pinch in = back to a 16:9 tube
-                MagnificationGesture().onEnded { scale in
-                    guard scale > 1.12 || scale < 0.89 else { return }
-                    Haptics.tap()
-                    withAnimation(.easeInOut(duration: 0.3)) { fill = scale > 1 }
-                }
-            )
-            .onLongPressGesture(minimumDuration: 1.2) { menuShown = true }
         }
         .ignoresSafeArea()
         .onAppear {
@@ -72,32 +76,10 @@ struct TVModeView: View {
         }
     }
 
-    /// Where the close button and the speed bar sit (so drags there don't change channel).
-    static func closeCenter(_ pic: CGRect) -> CGPoint {
-        let margin = max(pic.width * 0.045, 28)
-        return CGPoint(x: pic.minX + margin + 24, y: pic.minY + margin + 24)
-    }
-
-    static func speedRect(_ pic: CGRect) -> CGRect {
-        let margin = max(pic.width * 0.045, 28)
-        let w = min(380, pic.width * 0.42), h: CGFloat = 70
-        return CGRect(x: pic.minX + margin, y: pic.maxY - margin - 70 - h, width: w, height: h)
-    }
-
-    static func controlRects(_ pic: CGRect) -> [CGRect] {
-        let c = closeCenter(pic)
-        return [CGRect(x: c.x - 40, y: c.y - 40, width: 80, height: 80), speedRect(pic).insetBy(dx: -12, dy: -12)]
-    }
-
     private func dragGesture(size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 18)
             .onChanged { g in
                 if dragMode == .none {
-                    let pic = PictureLayout.tvScreen(in: size, fill: fill)
-                    if Self.controlRects(pic).contains(where: { $0.contains(g.startLocation) }) {
-                        dragMode = .ignored // sliding the speed bar, not changing channel
-                        return
-                    }
                     let dx = g.translation.width, dy = g.translation.height
                     if abs(dy) > abs(dx) * 1.2 {
                         dragMode = g.startLocation.x < size.width / 2 ? .brightness : .volume
@@ -264,29 +246,30 @@ struct TubeMask: Shape {
 /// Channel number, title and a volume-bar style timeline, in the TV mode's green.
 struct OSDLayer: View {
     @ObservedObject var tv: TVModel
-    let rect: CGRect
+    let place: OSDPlacement
+
+    private var rect: CGRect { place.pic }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.5)) { timeline in
             let now = timeline.date
             let visible = now < tv.osdUntil && !tv.poweringOn
-            let margin = max(rect.width * 0.045, 28)
             ZStack {
                 if visible {
                     VStack(alignment: .trailing, spacing: 0) {
-                        OSDText("CH", size: 16, dim: true)
-                        OSDText(String(format: "%02d", tv.channel), size: 64)
+                        OSDText("CH", size: place.channelSize / 4, dim: true)
+                        OSDText(String(format: "%02d", tv.channel), size: place.channelSize)
                     }
-                    .position(x: rect.maxX - margin - 50, y: rect.minY + margin + 40)
+                    .position(place.channel)
 
                     if tv.titleShown, let v = tv.current {
                         VStack(alignment: .leading, spacing: 6) {
                             OSDText(v.title, size: 22)
                             OSDText(v.author, size: 16, dim: true)
                         }
-                        .frame(width: rect.width * 0.56, alignment: .leading)
+                        .frame(width: place.titleWidth, alignment: .leading)
                         .lineLimit(1)
-                        .position(x: rect.minX + margin + 76 + rect.width * 0.28, y: rect.minY + margin + 30)
+                        .position(place.title)
                     }
 
                     if !tv.staticOn, tv.player.duration > 0 {
@@ -295,8 +278,8 @@ struct OSDLayer: View {
                             SegmentBar(value: tv.player.position / tv.player.duration)
                                 .frame(height: 16)
                         }
-                        .frame(width: rect.width - margin * 2)
-                        .position(x: rect.midX, y: rect.maxY - margin - 20)
+                        .frame(width: place.timelineWidth)
+                        .position(place.timeline)
                     }
                 }
 
@@ -323,20 +306,22 @@ struct OSDLayer: View {
 /// The buttons that come up with the on-screen display: the close button (top left) and the speed bar.
 struct TVTouchControls: View {
     @ObservedObject var tv: TVModel
-    let rect: CGRect
+    let place: OSDPlacement
     let onExit: () -> Void
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.5)) { timeline in
             let visible = (timeline.date < tv.osdUntil && !tv.poweringOn) || tv.message != nil
-            let speed = TVModeView.speedRect(rect)
             ZStack {
-                if visible {
+                // in the black corner it's always there; over a full-screen picture it comes with the info
+                if visible || place.inBands {
                     XPCloseButton(action: onExit)
-                        .position(TVModeView.closeCenter(rect))
+                        .position(place.close)
+                }
+                if visible {
                     SpeedSlider(rate: tv.rate, onChange: { tv.setRate($0) }, onTouch: { tv.keepOSD() })
-                        .frame(width: speed.width)
-                        .position(x: speed.midX, y: speed.midY)
+                        .frame(width: place.speedWidth)
+                        .position(place.speed)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

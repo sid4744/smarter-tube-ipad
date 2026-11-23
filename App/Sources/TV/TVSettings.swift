@@ -42,13 +42,19 @@ enum PictureLayout {
     /// The tube: a 16:9 picture fitted to the display, or the whole display when filling.
     static func tvScreen(in size: CGSize, fill: Bool) -> CGRect {
         if fill { return CGRect(origin: .zero, size: size) }
-        var w = size.width, h = size.width * 9 / 16
-        if h > size.height {
-            h = size.height
+        // leave black space: a strip on top for the close button, a band below for the on-screen display
+        let top = topBand, bottom = bottomBand
+        let available = max(100, size.height - top - bottom)
+        var w = size.width - 24, h = w * 9 / 16
+        if h > available {
+            h = available
             w = h * 16 / 9
         }
-        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+        return CGRect(x: (size.width - w) / 2, y: top + (available - h) / 2, width: w, height: h)
     }
+
+    static let topBand: CGFloat = 76
+    static let bottomBand: CGFloat = 150
 
     /// A 16:9 rectangle that covers `rect` (cropping whatever sticks out).
     static func cover(_ rect: CGRect) -> CGRect {
@@ -58,6 +64,45 @@ enum PictureLayout {
             w = h * 16 / 9
         }
         return CGRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h)
+    }
+}
+
+/// Where the TV's on-screen display goes: in the black band under a fitted tube,
+/// or over the picture when it fills the screen. The close button is always in the top-left corner.
+struct OSDPlacement {
+    let size: CGSize
+    let pic: CGRect
+
+    var inBands: Bool { size.height - pic.maxY >= 120 }
+
+    private var left: CGFloat { inBands ? pic.minX + 20 : pic.minX + margin }
+    private var right: CGFloat { inBands ? pic.maxX - 20 : pic.maxX - margin }
+    private var margin: CGFloat { max(pic.width * 0.045, 28) }
+
+    var close: CGPoint { CGPoint(x: 44, y: 40) }
+    /// Top-right corner, opposite the close button (the player's "TV OFF").
+    var corner: CGPoint { CGPoint(x: size.width - 74, y: 40) }
+
+    var channel: CGPoint {
+        inBands ? CGPoint(x: right - 36, y: pic.maxY + 44) : CGPoint(x: right - 50, y: pic.minY + margin + 40)
+    }
+    var channelSize: CGFloat { inBands ? 40 : 64 }
+
+    var titleWidth: CGFloat { inBands ? (right - left) * 0.74 : pic.width * 0.56 }
+    var title: CGPoint {
+        inBands ? CGPoint(x: left + titleWidth / 2, y: pic.maxY + 40)
+            : CGPoint(x: left + 76 + titleWidth / 2, y: pic.minY + margin + 30) // clear of the close button
+    }
+
+    var timelineWidth: CGFloat { inBands ? (right - left) * 0.6 : right - left }
+    var timeline: CGPoint {
+        inBands ? CGPoint(x: left + timelineWidth / 2, y: pic.maxY + 108) : CGPoint(x: pic.midX, y: pic.maxY - margin - 20)
+    }
+
+    var speedWidth: CGFloat { inBands ? min(360, (right - left) * 0.34) : min(380, pic.width * 0.42) }
+    var speed: CGPoint {
+        inBands ? CGPoint(x: right - speedWidth / 2, y: pic.maxY + 104)
+            : CGPoint(x: left + speedWidth / 2, y: pic.maxY - margin - 105)
     }
 }
 

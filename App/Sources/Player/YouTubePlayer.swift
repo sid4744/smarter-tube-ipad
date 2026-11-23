@@ -26,6 +26,8 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsPictureInPictureMediaPlayback = false
         let controller = WKUserContentController()
+        // runs inside YouTube's iframe too: its own title/logo/cards would show under our green display
+        controller.addUserScript(WKUserScript(source: Self.hideYouTubeChrome, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
         config.userContentController = controller
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
@@ -110,6 +112,20 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
             break
         }
     }
+
+    private static let hideYouTubeChrome = """
+    (function () {
+      if (!/(^|\\.)youtube(-nocookie)?\\.com$/.test(location.hostname)) return;
+      var s = document.createElement('style');
+      s.textContent = '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-title,'
+        + '.ytp-title-channel,.ytp-show-cards-title,.ytp-watermark,.ytp-youtube-button,.ytp-pause-overlay,'
+        + '.ytp-pause-overlay-container,.ytp-ce-element,.ytp-endscreen-content,.ytp-cards-teaser,.ytp-cards-button,'
+        + '.ytp-paid-content-overlay,.ytp-impression-link,.ytp-large-play-button,.ytp-contextmenu,.ytp-tooltip,'
+        + '.ytp-overflow-button,.ytp-share-button,.ytp-watch-later-button,.ytp-copylink-button,.iv-branding,'
+        + '.branding-img,.annotation{display:none!important}';
+      (document.head || document.documentElement).appendChild(s);
+    })();
+    """
 
     private static let html = """
     <!DOCTYPE html><html><head>

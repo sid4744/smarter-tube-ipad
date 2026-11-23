@@ -58,15 +58,12 @@ struct PlayerScreen: View {
 
                 touchLayer(size: geo.size)
 
-                if controls {
-                    Group {
-                        if tvView {
-                            tvControls(screen: screen)
-                        } else {
-                            controlsLayer(size: geo.size)
-                        }
-                    }
-                    .transition(.opacity)
+                if tvView {
+                    // TV view: close + TV OFF stay in the black corners; the rest comes and goes with a tap
+                    tvControls(place: OSDPlacement(size: geo.size, pic: screen), full: controls)
+                } else if controls {
+                    controlsLayer(size: geo.size)
+                        .transition(.opacity)
                 }
 
                 levelLayer
@@ -257,55 +254,59 @@ struct PlayerScreen: View {
     // MARK: - TV view controls
 
     /// The TV mode's on-screen display for this one video: title, buttons, and a timeline you can drag.
-    private func tvControls(screen: CGRect) -> some View {
-        let margin = max(screen.width * 0.045, 28)
-        return ZStack {
-            VStack(alignment: .leading, spacing: 6) {
-                OSDText(video.title, size: 22)
-                OSDText(video.author, size: 16, dim: true)
+    private func tvControls(place: OSDPlacement, full: Bool) -> some View {
+        ZStack {
+            if full || place.inBands {
+                XPCloseButton(action: onClose)
+                    .position(place.close)
+
+                OSDButton("TV OFF", size: 16) { setTV(false) }
+                    .fixedSize()
+                    .position(place.corner)
             }
-            .lineLimit(1)
-            .frame(width: screen.width * 0.5, alignment: .leading)
-            .position(x: screen.minX + margin + 76 + screen.width * 0.25, y: screen.minY + margin + 30)
-            .allowsHitTesting(false)
 
-            XPCloseButton(action: onClose)
-                .position(x: screen.minX + margin + 24, y: screen.minY + margin + 24)
-
-            OSDButton("TV OFF", size: 16) { setTV(false) }
-                .fixedSize()
-                .position(x: screen.maxX - margin - 60, y: screen.minY + margin + 28)
-
-            SpeedSlider(rate: rate, onChange: setRate, onTouch: poke)
-                .frame(width: min(380, screen.width * 0.42))
-                .position(x: screen.minX + margin + min(380, screen.width * 0.42) / 2, y: screen.maxY - margin - 140)
-
-            if player.duration > 0 {
-                VStack(alignment: .leading, spacing: 8) {
-                    OSDText(OSDTime.format(scrubbing ?? player.position) + " / " + OSDTime.format(player.duration), size: 16)
-                    GeometryReader { g in
-                        SegmentBar(value: (scrubbing ?? player.position) / player.duration)
-                            .frame(height: 16)
-                            .frame(maxHeight: .infinity)
-                            .contentShape(Rectangle())
-                            .gesture(
-                                DragGesture(minimumDistance: 0)
-                                    .onChanged { d in
-                                        scrubbing = min(1, max(0, d.location.x / g.size.width)) * player.duration
-                                        poke()
-                                    }
-                                    .onEnded { _ in
-                                        if let s = scrubbing { player.seek(to: s) }
-                                        scrubbing = nil
-                                    }
-                            )
-                    }
-                    .frame(height: 44)
+            if full {
+                VStack(alignment: .leading, spacing: 6) {
+                    OSDText(video.title, size: 22)
+                    OSDText(video.author, size: 16, dim: true)
                 }
-                .frame(width: screen.width - margin * 2)
-                .position(x: screen.midX, y: screen.maxY - margin - 30)
+                .lineLimit(1)
+                .frame(width: place.titleWidth, alignment: .leading)
+                .position(place.title)
+                .allowsHitTesting(false)
+
+                SpeedSlider(rate: rate, onChange: setRate, onTouch: poke)
+                    .frame(width: place.speedWidth)
+                    .position(place.speed)
+
+                if player.duration > 0 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        OSDText(OSDTime.format(scrubbing ?? player.position) + " / " + OSDTime.format(player.duration), size: 16)
+                        GeometryReader { g in
+                            SegmentBar(value: (scrubbing ?? player.position) / player.duration)
+                                .frame(height: 16)
+                                .frame(maxHeight: .infinity)
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { d in
+                                            scrubbing = min(1, max(0, d.location.x / g.size.width)) * player.duration
+                                            poke()
+                                        }
+                                        .onEnded { _ in
+                                            if let s = scrubbing { player.seek(to: s) }
+                                            scrubbing = nil
+                                        }
+                                )
+                        }
+                        .frame(height: 44)
+                    }
+                    .frame(width: place.timelineWidth)
+                    .position(place.timeline)
+                }
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: full)
     }
 
     private var levelLayer: some View {
