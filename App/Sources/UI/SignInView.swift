@@ -149,18 +149,21 @@ struct OSDText: View {
 
 struct OSDButton: View {
     let title: String
+    var size: CGFloat = 22
     let action: () -> Void
 
-    init(_ title: String, action: @escaping () -> Void) {
+    init(_ title: String, size: CGFloat = 22, action: @escaping () -> Void) {
         self.title = title
+        self.size = size
         self.action = action
     }
 
     var body: some View {
         Button(action: action) {
-            OSDText(title, size: 22)
-                .padding(.horizontal, 28)
-                .padding(.vertical, 12)
+            OSDText(title, size: size)
+                .padding(.horizontal, size * 1.25)
+                .padding(.vertical, size * 0.55)
+                .contentShape(Rectangle())
                 .overlay(Rectangle().stroke(Color.osdGreen, lineWidth: 3))
         }
         .buttonStyle(.plain)

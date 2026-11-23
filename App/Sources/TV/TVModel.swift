@@ -23,9 +23,6 @@ final class TVModel: ObservableObject {
     private var started = false
     private var volume = 1.0
 
-    static let powerOnSeconds = 2.8
-    static let minStatic = 0.9
-
     var current: FeedVideo? { channels[channel] }
 
     init() {
@@ -37,9 +34,9 @@ final class TVModel: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
-        poweringOn = true
+        poweringOn = TVSettings.powerOnSeconds > 0
         staticOn = true
-        let powerOnEnd = Date().addingTimeInterval(Self.powerOnSeconds)
+        let powerOnEnd = Date().addingTimeInterval(TVSettings.powerOnSeconds)
         Task {
             do {
                 guard var tokens = Keychain.load() else { message = "NOT SIGNED IN"; return }
@@ -74,7 +71,7 @@ final class TVModel: ObservableObject {
 
     func channelDown() {
         direction = -1
-        if channel == 1 {
+        if channel == 1 && TVSettings.channelZero {
             tuneZero()
             return
         }
@@ -134,7 +131,7 @@ final class TVModel: ObservableObject {
         if let m = memory[n], m.id == video.id, Date().timeIntervalSince(m.at) < 30 * 60 {
             return min(m.position + Date().timeIntervalSince(m.at), max(0, video.durationSec - 5))
         }
-        guard video.durationSec > 60 else { return 0 }
+        guard TVSettings.midway, video.durationSec > 60 else { return 0 }
         return video.durationSec * Double.random(in: 0.05...0.85)
     }
 
@@ -150,12 +147,12 @@ final class TVModel: ObservableObject {
         case .playing:
             guard staticOn, !poweringOn else { return }
             let serial = tuneSerial
-            let wait = Self.minStatic - Date().timeIntervalSince(tunedAt)
+            let wait = TVSettings.staticSeconds - Date().timeIntervalSince(tunedAt)
             Task {
                 if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1e9)) }
                 guard serial == tuneSerial else { return }
                 staticOn = false
-                osdUntil = Date().addingTimeInterval(4.5)
+                osdUntil = Date().addingTimeInterval(TVSettings.osdSeconds)
             }
         case .ended:
             nextProgram()
@@ -187,7 +184,7 @@ final class TVModel: ObservableObject {
 
     func showInfo() {
         titleShown = true
-        osdUntil = Date().addingTimeInterval(4.5)
+        osdUntil = Date().addingTimeInterval(TVSettings.osdSeconds)
     }
 
     func restartProgram() {

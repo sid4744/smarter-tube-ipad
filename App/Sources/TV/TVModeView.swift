@@ -9,18 +9,18 @@ struct TVModeView: View {
     @State private var menuShown = false
     @State private var dragMode = DragMode.none
     @State private var lastDragY: CGFloat = 0
+    @AppStorage(TVSettings.Key.fill) private var fill = false
 
     enum DragMode { case none, horizontal, brightness, volume }
 
     var body: some View {
         GeometryReader { geo in
-            let pic = Self.pictureRect(in: geo.size)
+            let pic = PictureLayout.tvScreen(in: geo.size, fill: fill)
             ZStack {
                 Color.black
 
                 YouTubePlayerView(player: tv.player)
-                    .frame(width: pic.width, height: pic.height)
-                    .position(x: pic.midX, y: pic.midY)
+                    .picture(screen: pic, video: PictureLayout.cover(pic))
 
                 StaticNoise()
                     .frame(width: pic.width, height: pic.height)
@@ -29,7 +29,7 @@ struct TVModeView: View {
                     .animation(.easeOut(duration: 0.6), value: tv.staticOn)
 
                 if tv.poweringOn {
-                    PowerOnView(rect: pic, duration: TVModel.powerOnSeconds)
+                    PowerOnView(rect: pic, duration: TVSettings.powerOnSeconds)
                 }
 
                 CRTOverlay(rect: pic)
@@ -46,6 +46,14 @@ struct TVModeView: View {
                     .exclusively(before: TapGesture(count: 1).onEnded { tv.showInfo() })
             )
             .simultaneousGesture(dragGesture(size: geo.size))
+            .simultaneousGesture(
+                // pinch out = fill the whole display, pinch in = back to a 16:9 tube
+                MagnificationGesture().onEnded { scale in
+                    guard scale > 1.12 || scale < 0.89 else { return }
+                    Haptics.tap()
+                    withAnimation(.easeInOut(duration: 0.3)) { fill = scale > 1 }
+                }
+            )
             .onLongPressGesture(minimumDuration: 1.2) { menuShown = true }
         }
         .ignoresSafeArea()
@@ -85,20 +93,12 @@ struct TVModeView: View {
                 if dragMode == .horizontal && abs(g.translation.width) > 60 {
                     // swipe left = next channel (the picture moves away to the left)
                     g.translation.width < 0 ? tv.channelUp() : tv.channelDown()
+                    Haptics.click()
                 }
                 dragMode = .none
             }
     }
 
-    /// A 16:9 picture fitted to the screen.
-    static func pictureRect(in size: CGSize) -> CGRect {
-        var w = size.width, h = size.width * 9 / 16
-        if h > size.height {
-            h = size.height
-            w = h * 16 / 9
-        }
-        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
-    }
 }
 
 // MARK: - Static
@@ -197,18 +197,27 @@ struct PowerOnView: View {
 /// Scanlines and darker edges over the picture, and the rounded corners of the tube around it.
 struct CRTOverlay: View {
     let rect: CGRect
+    @AppStorage(TVSettings.Key.scanlines) private var scanlines = true
+    @AppStorage(TVSettings.Key.vignette) private var vignette = true
+    @AppStorage(TVSettings.Key.corners) private var corners = true
 
     var body: some View {
         ZStack {
-            Scanlines()
-                .frame(width: rect.width, height: rect.height)
-                .position(x: rect.midX, y: rect.midY)
-            RadialGradient(colors: [.clear, .clear, .black.opacity(0.2), .black.opacity(0.5)],
-                           center: .center, startRadius: 0, endRadius: hypot(rect.width, rect.height) / 2)
-                .frame(width: rect.width, height: rect.height)
-                .position(x: rect.midX, y: rect.midY)
-            TubeMask(rect: rect, radius: min(rect.width, rect.height) * 0.06)
-                .fill(Color.black, style: FillStyle(eoFill: true))
+            if scanlines {
+                Scanlines()
+                    .frame(width: rect.width, height: rect.height)
+                    .position(x: rect.midX, y: rect.midY)
+            }
+            if vignette {
+                RadialGradient(colors: [.clear, .clear, .black.opacity(0.2), .black.opacity(0.5)],
+                               center: .center, startRadius: 0, endRadius: hypot(rect.width, rect.height) / 2)
+                    .frame(width: rect.width, height: rect.height)
+                    .position(x: rect.midX, y: rect.midY)
+            }
+            if corners {
+                TubeMask(rect: rect, radius: min(rect.width, rect.height) * 0.06)
+                    .fill(Color.black, style: FillStyle(eoFill: true))
+            }
         }
         .allowsHitTesting(false)
     }

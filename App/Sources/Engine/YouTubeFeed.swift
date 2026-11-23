@@ -69,22 +69,39 @@ enum YouTubeFeed {
     /// A browse page as titled rows, following "more shelves" pages up to `maxPages`.
     static func shelves(browseId: String, accessToken: String, maxPages: Int = 4) async throws -> [Shelf] {
         var out: [Shelf] = []
-        var root = try await browse(["browseId": browseId], accessToken: accessToken)
+        var p = try await page(browseId: browseId, accessToken: accessToken)
         var pages = 1
         while true {
-            for shelf in parseShelves(root) {
-                if shelf.isGrid, let last = out.indices.last, out[last].isGrid {
-                    let known = Set(out[last].videos.map(\.id))
-                    out[last].videos += shelf.videos.filter { !known.contains($0.id) } // next page of the same grid
-                } else {
-                    out.append(shelf)
-                }
-            }
-            guard pages < maxPages, let next = sectionContinuation(root) else { break }
-            root = try await browse(["continuation": next], accessToken: accessToken)
+            merge(p.shelves, into: &out)
+            guard pages < maxPages, let next = p.next else { break }
+            p = try await page(continuation: next, accessToken: accessToken)
             pages += 1
         }
         return out
+    }
+
+    /// One page of a browse screen, and the token for the next one (for endless scrolling).
+    struct Page {
+        var shelves: [Shelf]
+        var next: String?
+    }
+
+    static func page(browseId: String? = nil, continuation: String? = nil, accessToken: String) async throws -> Page {
+        let payload: [String: Any] = continuation.map { ["continuation": $0] } ?? ["browseId": browseId ?? "FEwhat_to_watch"]
+        let root = try await browse(payload, accessToken: accessToken)
+        return Page(shelves: parseShelves(root), next: sectionContinuation(root))
+    }
+
+    /// Adds a page's shelves; a grid page carries on the grid before it instead of starting a new one.
+    static func merge(_ new: [Shelf], into out: inout [Shelf]) {
+        for shelf in new {
+            if shelf.isGrid, let last = out.indices.last, out[last].isGrid {
+                let known = Set(out[last].videos.map(\.id))
+                out[last].videos += shelf.videos.filter { !known.contains($0.id) }
+            } else {
+                out.append(shelf)
+            }
+        }
     }
 
     static func search(_ query: String, accessToken: String) async throws -> [Shelf] {
@@ -256,6 +273,7 @@ enum YouTubeFeed {
         options: [.caseInsensitive])
 
     static func isForKids(_ v: FeedVideo) -> Bool {
+        guard TVSettings.hideKids else { return false }
         let text = v.title + " | " + v.author
         return kids.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
     }
