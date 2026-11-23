@@ -56,6 +56,16 @@ struct PlayerScreen: View {
                     CRTOverlay(rect: screen)
                 }
 
+                if tvView {
+                    let place = OSDPlacement(size: geo.size, pic: screen)
+                    CaptionLayer(player: player, point: place.captionPoint(osdVisible: controls), width: place.captionWidth)
+                        .opacity(tvStatic ? 0 : 1)
+                } else {
+                    CaptionLayer(player: player,
+                                 point: CGPoint(x: geo.size.width / 2, y: controls ? geo.size.height * 0.62 : geo.size.height - 56),
+                                 width: geo.size.width - 120, tvStyle: false)
+                }
+
                 touchLayer(size: geo.size)
 
                 if tvView {

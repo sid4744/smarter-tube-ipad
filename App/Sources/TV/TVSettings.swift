@@ -106,6 +106,46 @@ struct OSDPlacement {
     }
 }
 
+extension OSDPlacement {
+    /// Captions: in the black band under the tube (inside the picture while the band shows the info),
+    /// or near the bottom of a full-screen picture (above the info when it's up).
+    func captionPoint(osdVisible: Bool) -> CGPoint {
+        if inBands {
+            return osdVisible ? CGPoint(x: pic.midX, y: pic.maxY - 56) : CGPoint(x: pic.midX, y: (pic.maxY + size.height) / 2)
+        }
+        return osdVisible ? CGPoint(x: pic.midX, y: speed.y - 96) : CGPoint(x: pic.midX, y: size.height - 64)
+    }
+
+    var captionWidth: CGFloat { max(200, min(pic.width, size.width) - 80) }
+}
+
+/// Subtitles drawn by the app (so they land where we want, not wherever the video's crop puts them).
+struct CaptionLayer: View {
+    @ObservedObject var player: YouTubePlayer
+    let point: CGPoint
+    let width: CGFloat
+    var tvStyle = true
+
+    var body: some View {
+        ZStack {
+            if !player.caption.isEmpty {
+                Text(player.caption)
+                    .font(tvStyle ? .system(size: 24, weight: .semibold, design: .monospaced) : .system(size: 24, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Color.black.opacity(0.78))
+                    .frame(maxWidth: width)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .position(point)
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: point)
+        .allowsHitTesting(false)
+    }
+}
+
 /// Short taps of the Taptic Engine for touch feedback.
 enum Haptics {
     static func tap() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }

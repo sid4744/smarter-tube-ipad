@@ -54,6 +54,14 @@ struct TVModeView: View {
 
                 OSDLayer(tv: tv, place: OSDPlacement(size: geo.size, pic: pic))
 
+                TimelineView(.periodic(from: .now, by: 0.5)) { t in
+                    let place = OSDPlacement(size: geo.size, pic: pic)
+                    CaptionLayer(player: tv.player, point: place.captionPoint(osdVisible: t.date < tv.osdUntil && !tv.poweringOn),
+                                 width: place.captionWidth)
+                }
+                .opacity(tv.staticOn || tv.poweringOn ? 0 : 1)
+                .allowsHitTesting(false)
+
                 TVTouchControls(tv: tv, place: OSDPlacement(size: geo.size, pic: pic), onExit: onExit)
 
                 if let message = tv.message {

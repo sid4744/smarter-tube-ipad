@@ -17,6 +17,8 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
     @Published private(set) var position: Double = 0
     @Published private(set) var duration: Double = 0
     @Published private(set) var isPlaying = false
+    /// The caption on screen right now (read out of YouTube's player, which no longer draws it itself).
+    @Published private(set) var caption = ""
     private(set) var isReady = false
     private var pending: (id: String, start: Double)?
 
@@ -39,8 +41,10 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.scrollView.contentInset = .zero
         webView.isUserInteractionEnabled = false // the TV gestures sit on top
-        // A real https page as the embedder: YouTube refuses embeds without a referrer (error 152/153).
-        webView.loadHTMLString(Self.html, baseURL: URL(string: "https://sid4744.github.io/smarter-tv/"))
+        // The page lives at youtube.com (like Google's own iOS player helper): YouTube wants a referrer
+        // (error 152/153 without one), and being the same site as the embed lets us reach into the player
+        // to hide its own title/share/"more videos" and read the captions.
+        webView.loadHTMLString(Self.html, baseURL: URL(string: "https://www.youtube.com/"))
     }
 
     func load(videoId: String, start: Double) {
@@ -50,6 +54,7 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         }
         position = start
         duration = 0
+        caption = ""
         run("load('\(videoId)', \(Int(start)))")
     }
 
@@ -106,6 +111,9 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
             if state == 0 { onEvent?(.ended) }
         case "error":
             onEvent?(.error((value as? NSNumber)?.intValue ?? -1))
+        case "cc":
+            let text = (value as? String) ?? ""
+            if text != caption { caption = text }
         case "time":
             if let arr = value as? [NSNumber], arr.count == 2 {
                 position = arr[0].doubleValue
@@ -125,8 +133,29 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         + '.ytp-pause-overlay-container,.ytp-ce-element,.ytp-endscreen-content,.ytp-cards-teaser,.ytp-cards-button,'
         + '.ytp-paid-content-overlay,.ytp-impression-link,.ytp-large-play-button,.ytp-contextmenu,.ytp-tooltip,'
         + '.ytp-overflow-button,.ytp-share-button,.ytp-watch-later-button,.ytp-copylink-button,.iv-branding,'
-        + '.branding-img,.annotation{display:none!important}';
+        + '.branding-img,.annotation{display:none!important}'
+        + '.ytp-caption-window-container{opacity:0!important}';
       (document.head || document.documentElement).appendChild(s);
+
+      var last = null, queued = false;
+      function send(t) {
+        try { window.webkit.messageHandlers.yt.postMessage({type: 'cc', value: t}); }
+        catch (e) { try { window.parent.postMessage({smarterCC: t}, '*'); } catch (e2) {} }
+      }
+      function read() {
+        queued = false;
+        var lines = document.querySelectorAll('.ytp-caption-window-container .caption-visual-line');
+        var out = [];
+        for (var i = 0; i < lines.length; i++) {
+          var t = (lines[i].textContent || '').trim();
+          if (t) out.push(t);
+        }
+        var text = out.join('\\n');
+        if (text !== last) { last = text; send(text); }
+      }
+      new MutationObserver(function () {
+        if (!queued) { queued = true; setTimeout(read, 80); }
+      }).observe(document.documentElement, {subtree: true, childList: true, characterData: true});
     })();
     """
 
@@ -140,11 +169,14 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
     <script>
     var player;
     function post(t, v) { window.webkit.messageHandlers.yt.postMessage({type: t, value: (v === undefined ? null : v)}); }
+    window.addEventListener('message', function (e) {
+      if (e.data && typeof e.data === 'object' && e.data.smarterCC !== undefined) { post('cc', e.data.smarterCC); }
+    });
     function onYouTubeIframeAPIReady() {
       player = new YT.Player('p', {
         width: '100%', height: '100%',
         playerVars: {autoplay: 1, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3, modestbranding: 1,
-                     playsinline: 1, rel: 0, cc_load_policy: 0, origin: 'https://sid4744.github.io'},
+                     playsinline: 1, rel: 0, cc_load_policy: 0, origin: 'https://www.youtube.com'},
         events: {
           onReady: function () { post('ready'); },
           onStateChange: function (e) { post('state', e.data); },
@@ -157,6 +189,43 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
     setInterval(function () {
       if (player && player.getCurrentTime) { post('time', [player.getCurrentTime() || 0, player.getDuration() || 0]); }
     }, 500);
+
+    // Same site as the embed: hide YouTube's own on-screen bits, and hand us the captions to draw ourselves.
+    var HIDE = '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-title,'
+      + '.ytp-title-channel,.ytp-show-cards-title,.ytp-watermark,.ytp-youtube-button,.ytp-pause-overlay,'
+      + '.ytp-pause-overlay-container,.ytp-ce-element,.ytp-endscreen-content,.ytp-cards-teaser,.ytp-cards-button,'
+      + '.ytp-paid-content-overlay,.ytp-impression-link,.ytp-large-play-button,.ytp-contextmenu,.ytp-tooltip,'
+      + '.ytp-overflow-button,.ytp-share-button,.ytp-watch-later-button,.ytp-copylink-button,.iv-branding,'
+      + '.branding-img,.annotation,.ytp-suggested-action,.ytp-featured-product,.ytp-autonav-endscreen,'
+      + '.ytp-videowall-still,.ytp-player-content.ytp-iv-player-content{display:none!important}'
+      + '.ytp-caption-window-container{opacity:0!important}';
+    var lastCC = null;
+    function readCC(d) {
+      var lines = d.querySelectorAll('.ytp-caption-window-container .caption-visual-line');
+      var out = [];
+      for (var i = 0; i < lines.length; i++) {
+        var t = (lines[i].textContent || '').trim();
+        if (t) out.push(t);
+      }
+      var text = out.join('\\n');
+      if (text !== lastCC) { lastCC = text; post('cc', text); }
+    }
+    function hook() {
+      try {
+        var f = document.getElementById('p');
+        var d = f && f.contentDocument;
+        if (!d || !d.documentElement || d.getElementById('smarter-hide')) return;
+        var st = d.createElement('style');
+        st.id = 'smarter-hide';
+        st.textContent = HIDE;
+        (d.head || d.documentElement).appendChild(st);
+        var queued = false;
+        new d.defaultView.MutationObserver(function () {
+          if (!queued) { queued = true; setTimeout(function () { queued = false; readCC(d); }, 80); }
+        }).observe(d.documentElement, {subtree: true, childList: true, characterData: true});
+      } catch (e) {}
+    }
+    setInterval(hook, 700);
     </script></body></html>
     """
 }
