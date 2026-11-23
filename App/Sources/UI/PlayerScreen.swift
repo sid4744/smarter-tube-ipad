@@ -59,7 +59,7 @@ struct PlayerScreen: View {
                 touchLayer(size: geo.size)
 
                 if tvView {
-                    // TV view: close + TV OFF stay in the black corners; the rest comes and goes with a tap
+                    // TV view: the buttons and text come and go together with a tap
                     tvControls(place: OSDPlacement(size: geo.size, pic: screen), full: controls)
                 } else if controls {
                     controlsLayer(size: geo.size)
@@ -256,7 +256,7 @@ struct PlayerScreen: View {
     /// The TV mode's on-screen display for this one video: title, buttons, and a timeline you can drag.
     private func tvControls(place: OSDPlacement, full: Bool) -> some View {
         ZStack {
-            if full || place.inBands {
+            if full {
                 XPCloseButton(action: onClose)
                     .position(place.close)
 

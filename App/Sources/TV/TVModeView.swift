@@ -313,8 +313,8 @@ struct TVTouchControls: View {
         TimelineView(.periodic(from: .now, by: 0.5)) { timeline in
             let visible = (timeline.date < tv.osdUntil && !tv.poweringOn) || tv.message != nil
             ZStack {
-                // in the black corner it's always there; over a full-screen picture it comes with the info
-                if visible || place.inBands {
+                // comes and goes with the rest of the on-screen display (tap to bring it back)
+                if visible {
                     XPCloseButton(action: onExit)
                         .position(place.close)
                 }

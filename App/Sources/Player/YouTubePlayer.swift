@@ -35,6 +35,9 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         webView.isOpaque = false
         webView.backgroundColor = .black
         webView.scrollView.isScrollEnabled = false
+        // no safe-area padding inside the page: at the screen edge it pushed the picture up and cut off the bottom
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.contentInset = .zero
         webView.isUserInteractionEnabled = false // the TV gestures sit on top
         // A real https page as the embedder: YouTube refuses embeds without a referrer (error 152/153).
         webView.loadHTMLString(Self.html, baseURL: URL(string: "https://sid4744.github.io/smarter-tv/"))
