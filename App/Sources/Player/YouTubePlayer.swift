@@ -126,21 +126,35 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         }
     }
 
-    static let probeKey = "player.insideScriptSeen"
+    /// Set once the hiding style is really in YouTube's player (the old key only proved the script started).
+    static let probeKey = "player.insideScriptInstalled"
 
     private static let hideYouTubeChrome = """
     (function () {
       if (!/(^|\\.)youtube(-nocookie)?\\.com$/.test(location.hostname)) return;
-      try { window.webkit.messageHandlers.yt.postMessage({type: 'probe', value: location.hostname}); } catch (e) {}
-      var s = document.createElement('style');
-      s.textContent = '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-title,'
+      var CSS = '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-title,'
         + '.ytp-title-channel,.ytp-show-cards-title,.ytp-watermark,.ytp-youtube-button,.ytp-pause-overlay,'
         + '.ytp-pause-overlay-container,.ytp-ce-element,.ytp-endscreen-content,.ytp-cards-teaser,.ytp-cards-button,'
         + '.ytp-paid-content-overlay,.ytp-impression-link,.ytp-large-play-button,.ytp-contextmenu,.ytp-tooltip,'
         + '.ytp-overflow-button,.ytp-share-button,.ytp-watch-later-button,.ytp-copylink-button,.iv-branding,'
-        + '.branding-img,.annotation{display:none!important}'
+        + '.branding-img,.annotation,.ytp-suggested-action,.ytp-featured-product,.ytp-autonav-endscreen,'
+        + '.ytp-videowall-still,.ytp-player-content.ytp-iv-player-content,.ytp-more-videos-view,'
+        + '.ytp-expand-pause-overlay,.ytp-chrome-top-buttons{display:none!important}'
         + '.ytp-caption-window-container{opacity:0!important}';
-      (document.head || document.documentElement).appendChild(s);
+      // At document start there is no <html> yet: wait for it (appending to null threw and stopped everything).
+      function whenRoot(fn) {
+        if (document.documentElement) { fn(); return; }
+        new MutationObserver(function (m, o) {
+          if (document.documentElement) { o.disconnect(); fn(); }
+        }).observe(document, {childList: true});
+      }
+      function ensureStyle() {
+        if (document.getElementById('smarter-hide')) return;
+        var s = document.createElement('style');
+        s.id = 'smarter-hide';
+        s.textContent = CSS;
+        (document.head || document.documentElement).appendChild(s);
+      }
 
       var last = null, queued = false;
       function send(t) {
@@ -158,9 +172,14 @@ final class YouTubePlayer: NSObject, ObservableObject, WKScriptMessageHandler {
         var text = out.join('\\n');
         if (text !== last) { last = text; send(text); }
       }
-      new MutationObserver(function () {
-        if (!queued) { queued = true; setTimeout(read, 80); }
-      }).observe(document.documentElement, {subtree: true, childList: true, characterData: true});
+      whenRoot(function () {
+        ensureStyle();
+        new MutationObserver(function () {
+          ensureStyle(); // YouTube rebuilds <head>; keep our style in
+          if (!queued) { queued = true; setTimeout(read, 80); }
+        }).observe(document.documentElement, {subtree: true, childList: true, characterData: true});
+        try { window.webkit.messageHandlers.yt.postMessage({type: 'probe', value: location.hostname}); } catch (e) {}
+      });
     })();
     """
 
